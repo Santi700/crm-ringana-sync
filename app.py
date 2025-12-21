@@ -22,6 +22,36 @@ from email.mime.multipart import MIMEMultipart
 from werkzeug.utils import secure_filename
 
 # ==============================================================
+# 📁 CONFIGURACIÓN BASE DE DATOS
+# ==============================================================
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_PATH = os.path.join(BASE_DIR, "crm_data.sqlite3")
+
+
+def asegurar_columna_sf_pedido_id(conn):
+    cursor = conn.execute("PRAGMA table_info(pedidos)")
+    columnas = [col[1] for col in cursor.fetchall()]
+
+    if "sf_pedido_id" not in columnas:
+        print("🛠️ Añadiendo columna sf_pedido_id a pedidos...")
+        conn.execute("ALTER TABLE pedidos ADD COLUMN sf_pedido_id TEXT")
+        conn.commit()
+
+
+
+def get_db_connection():
+    conn = sqlite3.connect(DB_PATH)
+    conn.row_factory = sqlite3.Row
+
+    asegurar_columna_sf_pedido_id(conn)
+
+    return conn
+
+
+
+
+# ==============================================================
 # 🧼 Normalizar nombres de clientes (evitar duplicados)
 # ==============================================================
 
@@ -185,7 +215,7 @@ CALENDARIO_DESTINO = "Ringana"
 # 📦 Base de datos
 # ==============================================================
 
-DB_NAME = "crm_data.sqlite3"
+#DB_NAME = "crm_data.sqlite3"
 
 def get_db_connection():
     conn = sqlite3.connect(DB_PATH)
