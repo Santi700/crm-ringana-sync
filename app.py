@@ -532,22 +532,17 @@ def procesar_pedido(pedido):
 
 
 
-# ==============================================================
-# 🔵 CREAR / ACTUALIZAR PEDIDO EN SALESFORCE (VERSIÓN FINAL OK)
-# ==============================================================
-
 def procesar_pedido_sf(pedido):
     print("\n🟠 procesar_pedido_sf() llamado")
     print("📌 Pedido recibido:", pedido)
 
     # 1️⃣ Asegurar email (OPCIÓN B)
     email = pedido.get("cliente_email")
-
     if not email or "@" not in email:
         email = f"sin-email-{pedido['id_ringana']}@fake.local"
         print(f"⚠️ Email no válido. Usando email ficticio: {email}")
 
-    # 2️⃣ Crear / actualizar contacto (external_id = email)
+    # 2️⃣ Upsert contacto
     contact_id = upsert_contact(
         nombre=pedido["cliente_nombre"],
         email=email,
@@ -556,41 +551,42 @@ def procesar_pedido_sf(pedido):
     )
 
     if not contact_id:
-        print("❌ No se pudo crear/actualizar el contacto. Pedido cancelado.")
+        print("❌ Contacto inválido. Pedido cancelado.")
         return None
 
-    print("📌 contact_id obtenido:", contact_id)
-
-    # 3️⃣ Datos del pedido (NO Name, NO ID_Ringana__c en body)
+    # 3️⃣ Datos del pedido (SIN Name)
     data = {
         "Contact__c": contact_id,
         "Fecha_del_Pedido__c": pedido["fecha"],
-        "Total__c": float(pedido.get("total") or 0.0),
-        "Puntos__c": float(pedido.get("puntos") or 0.0),
+        "Total__c": float(pedido.get("total") or 0),
+        "Puntos__c": float(pedido.get("puntos") or 0),
         "Productos__c": pedido.get("productos", ""),
-        "Regalo__c": pedido.get("regalo", "")
+        "Regalo__c": pedido.get("regalo", ""),
     }
 
-    print("➡️ Enviando pedido a Salesforce:", data)
-
     try:
-        # 4️⃣ UPSERT por External ID (ANTI-DUPLICADOS)
-        result = sf.Pedido_Ringana__c.upsert(
+        sf.Pedido_Ringana__c.upsert(
             f"ID_Ringana__c/{pedido['id_ringana']}",
             data
         )
 
-        print("🔹 Resultado upsert pedido:", result)
+        # 4️⃣ 🔑 RECUPERAR EL ID SIEMPRE
+        res = sf.query(
+            f"SELECT Id FROM Pedido_Ringana__c WHERE ID_Ringana__c = '{pedido['id_ringana']}' LIMIT 1"
+        )
 
-        if isinstance(result, dict):
-            return result.get("id")
+        if res["records"]:
+            pedido_sf_id = res["records"][0]["Id"]
+            print(f"✅ Pedido Salesforce ID: {pedido_sf_id}")
+            return pedido_sf_id
 
+        print("❌ Pedido creado pero no se pudo recuperar el ID")
         return None
 
     except Exception as e:
-        print("❌ ERROR al enviar pedido a Salesforce")
-        print("❗ Excepción:", e)
-        print("⚠️ Detalle API:", getattr(e, "content", "Sin más info"))
+        print("❌ ERROR enviando pedido a Salesforce")
+        print("❗", e)
+        print("⚠️ API:", getattr(e, "content", ""))
         return None
 
 
