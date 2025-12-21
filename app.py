@@ -30,6 +30,14 @@ DB_PATH = os.path.join(BASE_DIR, "crm_data.sqlite3")
 
 
 def asegurar_columna_sf_pedido_id(conn):
+    cursor = conn.execute("""
+        SELECT name FROM sqlite_master
+        WHERE type='table' AND name='pedidos'
+    """)
+    if not cursor.fetchone():
+        print("⚠️ Tabla 'pedidos' no existe. Saltando comprobación de columnas.")
+        return
+
     cursor = conn.execute("PRAGMA table_info(pedidos)")
     columnas = [col[1] for col in cursor.fetchall()]
 
@@ -37,6 +45,7 @@ def asegurar_columna_sf_pedido_id(conn):
         print("🛠️ Añadiendo columna sf_pedido_id a pedidos...")
         conn.execute("ALTER TABLE pedidos ADD COLUMN sf_pedido_id TEXT")
         conn.commit()
+
 
 
 
