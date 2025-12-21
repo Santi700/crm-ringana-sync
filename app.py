@@ -264,6 +264,16 @@ def init_db():
 
 init_db()
 
+def asegurar_columna_sf_pedido_id(conn):
+    cursor = conn.execute("PRAGMA table_info(pedidos)")
+    columnas = [col[1] for col in cursor.fetchall()]
+
+    if "sf_pedido_id" not in columnas:
+        print("🛠️ Añadiendo columna sf_pedido_id a pedidos...")
+        conn.execute("ALTER TABLE pedidos ADD COLUMN sf_pedido_id TEXT")
+        conn.commit()
+
+
 # ==============================================================
 # 👥 Inicialización de usuarios CRM
 # ==============================================================
