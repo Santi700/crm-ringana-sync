@@ -188,9 +188,14 @@ CALENDARIO_DESTINO = "Ringana"
 DB_NAME = "crm_data.sqlite3"
 
 def get_db_connection():
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_PATH)
     conn.row_factory = sqlite3.Row
+
+    # 🔐 ASEGURAR ESQUEMA SIEMPRE
+    asegurar_columna_sf_pedido_id(conn)
+
     return conn
+
 
 def asegurar_columna_pedido_id():
     conn = get_db_connection()
