@@ -262,7 +262,24 @@ def init_db():
     conn.close()
     print("✅ Base de datos inicializada correctamente.")
 
+
 init_db()
+
+def asegurar_columna_sf_pedido_id(conn):
+    cursor = conn.cursor()
+    cursor.execute("""
+        PRAGMA table_info(pedidos)
+    """)
+    columnas = [col[1] for col in cursor.fetchall()]
+
+    if "sf_pedido_id" not in columnas:
+        print("🛠️ Añadiendo columna sf_pedido_id a pedidos...")
+        cursor.execute("""
+            ALTER TABLE pedidos
+            ADD COLUMN sf_pedido_id TEXT
+        """)
+        conn.commit()
+
 
 def asegurar_columna_sf_pedido_id(conn):
     cursor = conn.execute("PRAGMA table_info(pedidos)")
@@ -1892,6 +1909,7 @@ def sincronizar_pedidos_pendientes():
         JOIN clientes c ON c.id = p.cliente_id
         WHERE p.sf_pedido_id IS NULL
     """).fetchall()
+
 
     if not pedidos:
         print("✅ No hay pedidos pendientes.")
