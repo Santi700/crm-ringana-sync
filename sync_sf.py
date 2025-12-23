@@ -12,9 +12,15 @@ sys.path.insert(0, BASE_DIR)
 SF_USERNAME = os.getenv("SF_USERNAME")
 SF_PASSWORD = os.getenv("SF_PASSWORD")
 SF_TOKEN = os.getenv("SF_TOKEN")
+SF_DOMAIN = os.getenv("SF_DOMAIN", "login")
 
 if not SF_USERNAME or not SF_PASSWORD or not SF_TOKEN:
     raise RuntimeError("❌ Faltan variables de entorno Salesforce")
+
+print("DEBUG SF_USERNAME:", SF_USERNAME)
+print("DEBUG SF_DOMAIN:", SF_DOMAIN)
+print("DEBUG PASSWORD LEN:", len(SF_PASSWORD))
+print("DEBUG TOKEN LEN:", len(SF_TOKEN))
 
 # --------------------------------------------------
 # 🚀 Importar lógica principal desde app.py
