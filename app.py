@@ -309,6 +309,30 @@ def init_db():
 
 init_db()
 
+def email_ya_procesado(message_id):
+    conn = get_db_connection()
+    cur = conn.execute(
+        "SELECT 1 FROM emails_procesados WHERE message_id = ?",
+        (message_id,)
+    )
+    existe = cur.fetchone() is not None
+    conn.close()
+    return existe
+
+def marcar_email_como_procesado(message_id):
+    conn = get_db_connection()
+    conn.execute(
+        """
+        INSERT OR IGNORE INTO emails_procesados (message_id, fecha_procesado)
+        VALUES (?, datetime('now'))
+        """,
+        (message_id,)
+    )
+    conn.commit()
+    conn.close()
+
+
+
 def asegurar_columna_sf_pedido_id(conn):
     cursor = conn.cursor()
     cursor.execute("""
@@ -434,47 +458,90 @@ def enviar_sms_desde_mac(numero, mensaje):
         print(f"⚠️ Error enviando SMS desde Mac: {e}")
 
 # ==============================================================
-# Conexion + funciones 
+# Conexion + funciones  (Salesforce)
 # ==============================================================
 
 from simple_salesforce import Salesforce, SalesforceMalformedRequest
+import os
+import hashlib
 
-SF_USERNAME = "editiondeveloper@salesforce.com"
-SF_PASSWORD = "Ringana2025"
-SF_TOKEN = "UIeowZodqc1SiuUq5DUjuxLa"
-SF_DOMAIN = "login"   # ⚠️ Producción, NO sandbox
+# --------------------------------------------------
+# 🔍 Debug seguro (sin mostrar secretos)
+# --------------------------------------------------
+DEBUG = os.getenv("DEBUG", "0") == "1"
 
-# Conexión a Salesforce
-sf = Salesforce(
-    username=SF_USERNAME,
-    password=SF_PASSWORD,
-    security_token=SF_TOKEN,
-    domain=SF_DOMAIN
-)
+def _fp(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()[:8] if value else "EMPTY"
+
+# --------------------------------------------------
+# 🔗 Conexión a Salesforce (lazy)
+# - NO conecta al importar app.py
+# - Conecta solo cuando alguien llama get_sf()
+# --------------------------------------------------
+_sf = None
+
+def get_sf():
+    global _sf
+    if _sf is not None:
+        return _sf
+
+    # 🌍 Variables de entorno Salesforce (seguras)
+    SF_USERNAME = (os.getenv("SF_USERNAME") or "").strip()
+    SF_PASSWORD = (os.getenv("SF_PASSWORD") or "").strip()
+    SF_TOKEN    = (os.getenv("SF_TOKEN") or "").strip()
+    SF_DOMAIN   = (os.getenv("SF_DOMAIN") or "login").strip()  # default login
+
+    if not all([SF_USERNAME, SF_PASSWORD, SF_TOKEN]):
+        raise RuntimeError("❌ Faltan variables de entorno Salesforce")
+
+    # 🔐 Construcción robusta del password (evita duplicar token)
+    #full_password = SF_PASSWORD if SF_PASSWORD.endswith(SF_TOKEN) else (SF_PASSWORD + SF_TOKEN)
+
+    # 🔍 Debug seguro (NO muestra secretos)
+    if DEBUG:
+        print(f"DEBUG SF_USERNAME: {SF_USERNAME[:3]}***  FP={_fp(SF_USERNAME)}")
+        print(f"DEBUG SF_DOMAIN: {SF_DOMAIN}  FP={_fp(SF_DOMAIN)}")
+        print(f"DEBUG PASSWORD LEN: {len(SF_PASSWORD)}  FP={_fp(SF_PASSWORD)}")
+        print(f"DEBUG TOKEN LEN: {len(SF_TOKEN)}  FP={_fp(SF_TOKEN)}")
+
+        # ✅ Conexión a Salesforce (aquí sí conecta)
+    _sf = Salesforce(
+        username=SF_USERNAME,
+        password=SF_PASSWORD,
+        security_token=SF_TOKEN,
+        domain=SF_DOMAIN
+    )
+    return _sf
+
+
+
+
+
 
 
 # ==============================================================
-# 🔵 CREAR / ACTUALIZAR CONTACTO EN SALESFORCE (VERSIÓN FINAL)
+# 🔵 CREAR / ACTUALIZAR CONTACTO EN SALESFORCE (LAZY)
 # ==============================================================
 
 def upsert_contact(nombre, email, telefono, external_id):
+    sf = get_sf()  # ✅ Salesforce lazy (NO global)
+
     print("\n🔵 upsert_contact() llamado")
     print("📌 Datos recibidos:", nombre, email, telefono, external_id)
 
     # --- Separar nombre y apellidos ---
     try:
-        partes = nombre.strip().split()
+        partes = (nombre or "").strip().split()
         if len(partes) == 1:
-            first_name = partes[0]
+            first_name = partes[0] or "SinNombre"
             last_name = "Cliente"
         else:
             first_name = partes[0]
-            last_name = " ".join(partes[1:])
-    except:
-        first_name = nombre or "SinNombre"
+            last_name = " ".join(partes[1:]) or "Cliente"
+    except Exception:
+        first_name = "SinNombre"
         last_name = "Cliente"
 
-    # --- Body sin external ID ---
     data = {
         "FirstName": first_name,
         "LastName": last_name,
@@ -483,26 +550,23 @@ def upsert_contact(nombre, email, telefono, external_id):
     }
 
     try:
-        # Intentar upsert
         result = sf.Contact.upsert(f"External_Id__c/{external_id}", data)
         print("🔹 Resultado upsert contacto:", result)
 
-        # Si Salesforce devuelve dict → OK
-        if isinstance(result, dict) and "id" in result:
+        if isinstance(result, dict) and result.get("id"):
             return result["id"]
 
-        # Si devuelve solo 200 → recuperar el contacto con una consulta
-        print("⚠️ Salesforce devolvió solo código 200, recuperando ID...")
+        print("⚠️ Upsert devolvió 200 sin ID; recuperando por External_Id__c...")
 
         query = f"SELECT Id FROM Contact WHERE External_Id__c = '{external_id}' LIMIT 1"
         res = sf.query(query)
 
-        if res["records"]:
+        if res.get("records"):
             contact_id = res["records"][0]["Id"]
             print("✅ Contacto encontrado por external id:", contact_id)
             return contact_id
 
-        print("❌ No se pudo recuperar el contacto aunque Salesforce devolvió 200")
+        print("❌ No se pudo recuperar el contacto")
         return None
 
     except Exception as e:
@@ -517,7 +581,10 @@ def upsert_contact(nombre, email, telefono, external_id):
 
 
 
+
 def upsert_pedido(contact_id, pedido):
+    sf = get_sf()  # ✅ Salesforce lazy (NO global)
+
     print("\n🟠 upsert_pedido() llamado")
     print("📌 contact_id recibido:", contact_id)
     print("📌 pedido recibido:", pedido)
@@ -525,12 +592,11 @@ def upsert_pedido(contact_id, pedido):
     data = {
         "Contact__c": contact_id,
         "Fecha_del_Pedido__c": pedido["fecha"],
-        "Total__c": float(pedido["total"]),
-        "Puntos__c": float(pedido.get("puntos", 0)),
+        "Total__c": float(pedido.get("total") or 0),
+        "Puntos__c": float(pedido.get("puntos") or 0),
         "Productos__c": pedido.get("productos", ""),
         "Regalo__c": pedido.get("regalo", "")
-    }   
-
+    }
 
     try:
         result = sf.Pedido_Ringana__c.upsert(
@@ -538,14 +604,13 @@ def upsert_pedido(contact_id, pedido):
             data
         )
 
-        if isinstance(result, dict) and "id" in result:
+        if isinstance(result, dict) and result.get("id"):
             return result["id"]
 
-        # Recuperar ID si Salesforce devolvió solo 200
         res = sf.query(
             f"SELECT Id FROM Pedido_Ringana__c WHERE ID_Ringana__c = '{pedido['id_ringana']}' LIMIT 1"
         )
-        if res["records"]:
+        if res.get("records"):
             return res["records"][0]["Id"]
 
         return None
@@ -553,9 +618,9 @@ def upsert_pedido(contact_id, pedido):
     except Exception as e:
         print("❌ ERROR AL ENVIAR PEDIDO A SALESFORCE")
         print("❗ EXCEPCIÓN:", e)
-        if hasattr(e, "content"):
-            print("⚠️ Detalle API:", e.content)
+        print("⚠️ Detalle API:", getattr(e, "content", ""))
         return None
+
     
 def normalizar_email(email):
     """
@@ -607,6 +672,9 @@ def procesar_pedido_sf(pedido):
     print("\n🟠 procesar_pedido_sf() llamado")
     print("📌 Pedido recibido:", pedido)
 
+    # ✅ Salesforce lazy (NO global)
+    sf = get_sf()
+
     # 1️⃣ Asegurar email (OPCIÓN B)
     email = pedido.get("cliente_email")
     if not email or "@" not in email:
@@ -625,7 +693,7 @@ def procesar_pedido_sf(pedido):
         print("❌ Contacto inválido. Pedido cancelado.")
         return None
 
-    # 3️⃣ Datos del pedido (SIN Name)
+    # 3️⃣ Datos del pedido
     data = {
         "Contact__c": contact_id,
         "Fecha_del_Pedido__c": pedido["fecha"],
@@ -641,12 +709,12 @@ def procesar_pedido_sf(pedido):
             data
         )
 
-        # 4️⃣ 🔑 RECUPERAR EL ID SIEMPRE
+        # 4️⃣ Recuperar ID
         res = sf.query(
             f"SELECT Id FROM Pedido_Ringana__c WHERE ID_Ringana__c = '{pedido['id_ringana']}' LIMIT 1"
         )
 
-        if res["records"]:
+        if res.get("records"):
             pedido_sf_id = res["records"][0]["Id"]
             print(f"✅ Pedido Salesforce ID: {pedido_sf_id}")
             return pedido_sf_id
@@ -659,6 +727,7 @@ def procesar_pedido_sf(pedido):
         print("❗", e)
         print("⚠️ API:", getattr(e, "content", ""))
         return None
+
 
 
 
@@ -720,7 +789,6 @@ def agregar_evento_calendario_mac(cliente, pedido):
         )
 
         applescript = f"""
-        tell application "Calendar"
             set calName to "{CALENDARIO_DESTINO}"
             if not (exists calendar calName) then
                 make new calendar with properties {{name:calName}}
@@ -2003,6 +2071,9 @@ def sincronizar_pedidos_pendientes():
 def sincronizar_pedidos_sf():
     conn = get_db_connection()
 
+    # ✅ Salesforce lazy (NO global)
+    sf = get_sf()
+
     # 1️⃣ Seleccionar solo pedidos NO sincronizados
     pedidos = conn.execute("""
         SELECT *
@@ -2031,46 +2102,62 @@ def sincronizar_pedidos_sf():
 
         print(f"\n🔄 SINCRONIZANDO PEDIDO {p['id']}...")
 
-        # Enviar contacto
+        # ✅ Email normalizado / fallback (evita null y emails raros)
+        email = (cliente["email"] or "").strip().lower()
+        if not email or "@" not in email:
+            email = f"sin-email-{p['id']}@fake.local"
+            print(f"⚠️ Cliente sin email válido. Usando ficticio: {email}")
+
+        # 2️⃣ Enviar/Upsert contacto
         contact_id = upsert_contact(
-            cliente["nombre"],
-            cliente["email"],
-            cliente["telefono"],
-            cliente["email"]
+            nombre=cliente["nombre"],
+            email=email,
+            telefono=cliente.get("telefono", "") if isinstance(cliente, dict) else cliente["telefono"],
+            external_id=email
         )
 
-        contact_id = upsert_contact(...)
-
         if not contact_id:
-            log_error(f"Pedido {pedido_id} cancelado: contacto inválido")
+            print(f"❌ Pedido {p['id']} cancelado: contacto inválido")
             continue  # ← NO crear pedido
 
+        # ✅ Determinar ID externo del pedido (Ringana) con fallback
+        pedido_ext_id = (
+            p.get("id_ringana")
+            or p.get("pedido_id_ringana")
+            or str(p["id"])
+        )
+
+        # ✅ Productos: soporta 'producto' o 'productos'
+        productos = p.get("productos") or p.get("producto") or ""
 
         # Crear cuerpo del pedido para SF
         data_pedido = {
             "Contact__c": contact_id,
             "Fecha_del_Pedido__c": p["fecha"],
-            "Puntos__c": float(p["puntos"] or 0.0),
-            "Total__c": float(p["total"] or 0.0),
-            "Productos__c": p["producto"] or "",
-            "Regalo__c": p["regalo"] or ""
+            "Puntos__c": float(p.get("puntos") or 0.0),
+            "Total__c": float(p.get("total") or 0.0),
+            "Productos__c": productos,
+            "Regalo__c": p.get("regalo") or ""
         }
 
         try:
             result = sf.Pedido_Ringana__c.upsert(
-                f"ID_Ringana__c/{p['pedido_id_ringana'] or p['id']}",
+                f"ID_Ringana__c/{pedido_ext_id}",
                 data_pedido
             )
 
             # Salesforce devuelve dict o código
+            sf_id = None
             if isinstance(result, dict):
                 sf_id = result.get("id")
-            else:
-                # Recuperar id si no vino el dict
+
+            # ✅ Recuperar id si no vino el dict
+            if not sf_id:
                 rec = sf.query(
-                    f"SELECT Id FROM Pedido_Ringana__c WHERE ID_Ringana__c = '{p['pedido_id_ringana'] or p['id']}'"
+                    f"SELECT Id FROM Pedido_Ringana__c WHERE ID_Ringana__c = '{pedido_ext_id}' LIMIT 1"
                 )
-                sf_id = rec["records"][0]["Id"] if rec["totalSize"] > 0 else None
+                if rec.get("records"):
+                    sf_id = rec["records"][0]["Id"]
 
             if sf_id:
                 conn.execute("""
@@ -2086,12 +2173,14 @@ def sincronizar_pedidos_sf():
                 print(f"❌ No se pudo obtener ID Salesforce para pedido {p['id']}.")
 
         except Exception as e:
-            print(f"❌ Error enviando pedido {p['id']} a Salesforce:", e)
+            print(f"❌ Error enviando pedido {p['id']} a Salesforce: {e}")
+            print("⚠️ Detalle API:", getattr(e, "content", ""))
             continue
 
     conn.close()
     flash(f"🔄 Sincronización completada. {sincronizados} pedidos enviados.", "success")
     return redirect(url_for("index"))
+
 
 
 
