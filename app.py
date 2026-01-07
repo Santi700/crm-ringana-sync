@@ -478,7 +478,17 @@ def _fp(value: str) -> str:
 # - NO conecta al importar app.py
 # - Conecta solo cuando alguien llama get_sf()
 # --------------------------------------------------
+from simple_salesforce import Salesforce, SalesforceMalformedRequest
+import hashlib
+
+DEBUG = os.getenv("DEBUG", "0") == "1"
+
+def _fp(value: str) -> str:
+    return hashlib.sha256(value.encode()).hexdigest()[:8] if value else "EMPTY"
+
+
 _sf = None
+
 
 def get_sf():
     global _sf
